@@ -1,3 +1,6 @@
+# Created by: Hunter Tiner [HuLaTin@gmail.com]
+# https://hulatin.shinyapps.io/SPOD_Viz_App/
+
 library(shiny)
 library(shinydashboard)
 library(plotly)
