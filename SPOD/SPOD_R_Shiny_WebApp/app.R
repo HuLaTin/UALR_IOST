@@ -1,3 +1,6 @@
+# Created by: Hunter Tiner [HuLaTin@gmail.com]
+# https://hulatin.shinyapps.io/SPOD_Viz_App/
+
 # Load required libraries
 library(shiny)
 library(shinydashboard)
@@ -6,6 +9,7 @@ library(readr)
 library(DT)
 library(zoo)  # For moving average calculation
 library(shinyjs)  # For using HTML tags and CSS
+library(scales)  # For color scales
 
 # Custom CSS for horizontal scrolling
 custom_css <- "
@@ -73,8 +77,14 @@ ui <- dashboardPage(
       ),
       tabItem(tabName = "scatter_plot_tab",
               fluidRow(
-                box(title = "Scatter Plot", status = "primary", solidHeader = TRUE, width = 12,
-                    uiOutput("scatter_plot_ui"))
+                box(title = "Scatter Plot", status = "primary", solidHeader = TRUE, width = 6,
+                    plotlyOutput("scatter_plot", height = "700px")),
+                box(title = "Time Series Plot", status = "primary", solidHeader = TRUE, width = 6,
+                    plotlyOutput("time_series_plot", height = "700px"))
+              ),
+              fluidRow(
+                box(title = "Time Filter", status = "primary", solidHeader = TRUE, width = 12,
+                    uiOutput("scatter_time_slider"))
               )
       ),
       tabItem(tabName = "data_preview_tab",
@@ -117,7 +127,10 @@ server <- function(input, output, session) {
   
   data <- reactive({
     req(input$file1)
-    read_csv(input$file1$datapath, col_names = input$header)
+    df <- read_csv(input$file1$datapath, col_names = input$header)
+    df[[1]] <- as.POSIXct(df[[1]], format="%Y-%m-%d %H:%M:%S")
+    print(str(df)) # Debug print
+    df
   })
   
   output$column_selector <- renderUI({
@@ -127,13 +140,13 @@ server <- function(input, output, session) {
   })
   
   output$x_column_selector <- renderUI({
-    req(input$scatter_enable, data())
+    req(data())
     cols <- names(data())[-1] # Exclude the first column
     selectInput("x_column", "X Column", choices = cols, selected = cols[1], selectize = TRUE)
   })
   
   output$y_column_selector <- renderUI({
-    req(input$scatter_enable, data())
+    req(data())
     cols <- names(data())[-1] # Exclude the first column
     selectInput("y_column", "Y Column", choices = cols, selected = cols[2], selectize = TRUE)
   })
@@ -155,8 +168,17 @@ server <- function(input, output, session) {
   output$time_slider <- renderUI({
     req(data())
     df <- data()
-    df[[1]] <- as.POSIXct(df[[1]], format="%Y-%m-%d %H:%M:%S")
     sliderInput("time_range", "Select Time Range:",
+                min = min(df[[1]], na.rm = TRUE),
+                max = max(df[[1]], na.rm = TRUE),
+                value = c(min(df[[1]], na.rm = TRUE), max(df[[1]], na.rm = TRUE)),
+                timeFormat = "%Y-%m-%d %H:%M:%S")
+  })
+  
+  output$scatter_time_slider <- renderUI({
+    req(data())
+    df <- data()
+    sliderInput("scatter_time_range", "Select Time Range:",
                 min = min(df[[1]], na.rm = TRUE),
                 max = max(df[[1]], na.rm = TRUE),
                 value = c(min(df[[1]], na.rm = TRUE), max(df[[1]], na.rm = TRUE)),
@@ -168,14 +190,13 @@ server <- function(input, output, session) {
     
     df <- data()
     
-    # Convert the first column to date/time if not already
-    df[[1]] <- as.POSIXct(df[[1]], format="%Y-%m-%d %H:%M:%S")
-    
     # Filter data based on time range
     df <- df[df[[1]] >= input$time_range[1] & df[[1]] <= input$time_range[2], ]
     
     # Filter columns based on selection
-    selected_df <- df[, c(names(df)[1], input$selected_columns), drop = FALSE]
+    selected_columns <- c("Time", input$selected_columns)  # Ensure "Time" column is included
+    selected_df <- df[, selected_columns, drop = FALSE]
+    print(head(selected_df)) # Debug print
     
     # Apply moving average if smoothing is enabled
     if (input$smoothing) {
@@ -204,32 +225,97 @@ server <- function(input, output, session) {
     p
   })
   
-  output$scatter_plot_ui <- renderUI({
-    if (!input$scatter_enable || is.null(input$x_column) || is.null(input$y_column)) {
-      h4("Please enable the scatter plot and select the columns for X and Y axes.")
-    } else {
-      plotlyOutput("scatter_plot", height = "700px")
-    }
-  })
-  
   output$scatter_plot <- renderPlotly({
-    req(input$scatter_enable, input$x_column, input$y_column, data())
+    req(input$scatter_enable, input$x_column, input$y_column, input$scatter_time_range, data())
     
     scatter_df <- data()
+    
+    # Filter data based on scatter time range
+    scatter_df <- scatter_df[scatter_df[[1]] >= input$scatter_time_range[1] & scatter_df[[1]] <= input$scatter_time_range[2], ]
     
     max_abs_x <- max(abs(scatter_df[[input$x_column]]), na.rm = TRUE)
     max_abs_y <- max(abs(scatter_df[[input$y_column]]), na.rm = TRUE)
     max_abs <- max(max_abs_x, max_abs_y)
     
-    p <- plot_ly(scatter_df, x = ~scatter_df[[input$x_column]], y = ~scatter_df[[input$y_column]], type = 'scatter', mode = 'markers')
+    # Calculate averages
+    avg_x <- mean(scatter_df[[input$x_column]], na.rm = TRUE)
+    avg_y <- mean(scatter_df[[input$y_column]], na.rm = TRUE)
+    
+    # Create color gradient from green to red based on time
+    time_range <- range(as.numeric(scatter_df[[1]]), na.rm = TRUE)
+    colors <- scales::col_numeric("RdYlGn", domain = time_range)
+    
+    p <- plot_ly(scatter_df, x = ~scatter_df[[input$x_column]], y = ~scatter_df[[input$y_column]], 
+                 type = 'scatter', mode = 'markers',
+                 marker = list(color = ~as.numeric(scatter_df[[1]]), colorscale = list(
+                   c(0, 'green'), c(1, 'red')
+                 ), showscale = FALSE)) %>%
+      add_lines(x = c(0, avg_x), y = c(0, avg_y), line = list(color = 'blue', dash = 'dash'))
     p <- layout(p, title = "Scatter Plot",
-                xaxis = list(title = input$x_column, range = c(-max_abs, max_abs)),
-                yaxis = list(title = input$y_column, range = c(-max_abs, max_abs)),
-                shapes = list(
-                  list(type = 'line', x0 = -max_abs, x1 = max_abs, y0 = 0, y1 = 0, line = list(color = 'black', dash = 'dash')),
-                  list(type = 'line', x0 = 0, x1 = 0, y0 = -max_abs, y1 = max_abs, line = list(color = 'black', dash = 'dash'))
-                ))
+                xaxis = list(title = input$x_column, range = c(-max_abs, max_abs), zeroline = TRUE),
+                yaxis = list(title = input$y_column, range = c(-max_abs, max_abs), zeroline = TRUE))
+    
     p
+  })
+  
+  output$time_series_plot <- renderPlotly({
+    req(input$scatter_enable, input$x_column, input$y_column, input$scatter_time_range, data())
+    
+    scatter_df <- data()
+    
+    # Filter data based on scatter time range
+    scatter_df <- scatter_df[scatter_df[[1]] >= input$scatter_time_range[1] & scatter_df[[1]] <= input$scatter_time_range[2], ]
+    
+    time_series_data <- scatter_df[, c("Time", input$x_column, input$y_column)]
+    
+    p <- plot_ly(time_series_data, x = ~time_series_data[[1]])
+    p <- add_lines(p, y = ~time_series_data[[2]], name = input$x_column)
+    p <- add_lines(p, y = ~time_series_data[[3]], name = input$y_column)
+    p <- layout(p, title = "Time Series Plot",
+                xaxis = list(title = "Time"),
+                yaxis = list(title = "Values"))
+    
+    p
+  })
+  
+  observeEvent(event_data("plotly_hover", "scatter_plot"), {
+    hover_data <- event_data("plotly_hover", "scatter_plot")
+    if (!is.null(hover_data)) {
+      point_time <- hover_data$customdata[[1]]
+      time_series_data <- data()
+      time_series_data <- time_series_data[time_series_data[[1]] == point_time, ]
+      if (nrow(time_series_data) > 0) {
+        plotlyProxy("time_series_plot", session) %>%
+          plotlyProxyInvoke("deleteTraces") %>%
+          plotlyProxyInvoke("addTraces", list(
+            x = list(time_series_data[[1]]),
+            y = list(time_series_data[[2]], time_series_data[[3]]),
+            type = "scatter",
+            mode = "markers",
+            marker = list(color = "red", size = 10)
+          ))
+      }
+    }
+  })
+  
+  observeEvent(event_data("plotly_hover", "time_series_plot"), {
+    hover_data <- event_data("plotly_hover", "time_series_plot")
+    if (!is.null(hover_data)) {
+      point_time <- as.POSIXct(hover_data$x, origin = "1970-01-01")
+      scatter_data <- data()
+      scatter_data <- scatter_data[scatter_data[[1]] == point_time, ]
+      if (nrow(scatter_data) > 0) {
+        plotlyProxy("scatter_plot", session) %>%
+          plotlyProxyInvoke("deleteTraces") %>%
+          plotlyProxyInvoke("addTraces", list(
+            x = list(scatter_data[[input$x_column]]),
+            y = list(scatter_data[[input$y_column]]),
+            type = "scatter",
+            mode = "markers",
+            marker = list(color = "red", size = 10)
+          ))
+      }
+    }
   })
 }
 
