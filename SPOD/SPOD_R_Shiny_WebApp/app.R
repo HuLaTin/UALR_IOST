@@ -243,17 +243,20 @@ server <- function(input, output, session) {
     
     # Create color gradient from green to red based on time
     time_range <- range(as.numeric(scatter_df[[1]]), na.rm = TRUE)
-    colors <- scales::col_numeric("RdYlGn", domain = time_range)
+    palette <- colorRampPalette(c("green", "yellow", "red"))
+    colors <- scales::col_numeric(palette = palette(100), domain = time_range)
+    
+    scatter_df$color <- colors(as.numeric(scatter_df[[1]]))
     
     p <- plot_ly(scatter_df, x = ~scatter_df[[input$x_column]], y = ~scatter_df[[input$y_column]], 
                  type = 'scatter', mode = 'markers',
-                 marker = list(color = ~as.numeric(scatter_df[[1]]), colorscale = list(
-                   c(0, 'green'), c(1, 'red')
-                 ), showscale = FALSE)) %>%
+                 marker = list(color = ~color, showscale = FALSE)) %>%
       add_lines(x = c(0, avg_x), y = c(0, avg_y), line = list(color = 'blue', dash = 'dash'))
+    
     p <- layout(p, title = "Scatter Plot",
                 xaxis = list(title = input$x_column, range = c(-max_abs, max_abs), zeroline = TRUE),
-                yaxis = list(title = input$y_column, range = c(-max_abs, max_abs), zeroline = TRUE))
+                yaxis = list(title = input$y_column, range = c(-max_abs, max_abs), zeroline = TRUE),
+                showlegend = FALSE)
     
     p
   })
